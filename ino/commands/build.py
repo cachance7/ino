@@ -118,20 +118,18 @@ class Build(Command):
                             help='Verbose make output')
 
     def discover(self, args):
-        board = self.e.board_model(args.board_model)
-
-        core_place = os.path.join(board['_coredir'], 'cores', board['build']['core'])
-        core_header = 'Arduino.h' if self.e.arduino_lib_version.major else 'WProgram.h'
-        self.e.find_dir('arduino_core_dir', [core_header], [core_place],
-                        human_name='Arduino core library')
-
-        if self.e.arduino_lib_version.major:
-            variants_place = os.path.join(board['_coredir'], 'variants')
-            self.e.find_dir('arduino_variants_dir', ['.'], [variants_place],
-                            human_name='Arduino variants directory')
+        self.e.find_arduino_dir('arduino_core_dir',
+                                ['hardware', 'arduino', 'avr', 'cores', 'arduino'],
+                                ['Arduino.h'] if self.e.arduino_lib_version.major else ['WProgram.h'],
+                                'Arduino core library')
 
         self.e.find_arduino_dir('arduino_libraries_dir', ['libraries'],
                                 human_name='Arduino standard libraries')
+
+        #if self.e.arduino_lib_version.major:
+        self.e.find_arduino_dir('arduino_variants_dir',
+                                ['hardware', 'arduino', 'avr', 'variants'],
+                                human_name='Arduino variants directory')
 
         toolset = [
             ('make', args.make),
@@ -143,7 +141,7 @@ class Build(Command):
 
         for tool_key, tool_binary in toolset:
             self.e.find_arduino_tool(
-                tool_key, ['hardware', 'tools', 'avr', 'bin'], 
+                tool_key, ['hardware', 'tools', 'avr', 'bin'],
                 items=[tool_binary], human_name=tool_binary)
 
     def setup_flags(self, args):
@@ -155,7 +153,7 @@ class Build(Command):
             '-DF_CPU=' + board['build']['f_cpu'],
             '-DARDUINO=' + str(self.e.arduino_lib_version.as_int()),
             '-I' + self.e['arduino_core_dir'],
-        ]) 
+        ])
         # Add additional flags as specified
         self.e['cppflags'] += SpaceList(shlex.split(args.cppflags))
 
@@ -163,11 +161,11 @@ class Build(Command):
             self.e['cppflags'].append('-DUSB_VID=%s' % board['build']['vid'])
         if 'pid' in board['build']:
             self.e['cppflags'].append('-DUSB_PID=%s' % board['build']['pid'])
-            
-        if self.e.arduino_lib_version.major:
-            variant_dir = os.path.join(self.e.arduino_variants_dir, 
-                                       board['build']['variant'])
-            self.e.cppflags.append('-I' + variant_dir)
+
+        #if self.e.arduino_lib_version.major:
+        variant_dir = os.path.join(self.e.arduino_variants_dir,
+                                   board['build']['variant'])
+        self.e.cppflags.append('-I' + variant_dir)
 
         self.e['cflags'] = SpaceList(shlex.split(args.cflags))
         self.e['cxxflags'] = SpaceList(shlex.split(args.cxxflags))
@@ -221,7 +219,7 @@ class Build(Command):
         flags = SpaceList()
         for d in libdirs:
             flags.append('-I' + d)
-            flags.extend('-I' + subd for subd in list_subdirs(d, recursive=True, exclude=['examples']))
+            flags.extend('-I' + subd for subd in list_subdirs(d, recursive=True, exclude=['examples', 'src']))
         return flags
 
     def _scan_dependencies(self, dir, lib_dirs, inc_flags):
@@ -252,7 +250,7 @@ class Build(Command):
         # If lib A depends on lib B it have to appear before B in final
         # list so that linker could link all together correctly
         # but order of `_scan_dependencies` is not defined, so...
-        
+
         # 1. Get dependencies of sources in arbitrary order
         used_libs = list(self._scan_dependencies(self.e.src_dir, lib_dirs, inc_flags))
 

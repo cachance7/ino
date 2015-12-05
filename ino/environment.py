@@ -16,7 +16,7 @@ except ImportError:
     from ordereddict import OrderedDict
 
 from collections import namedtuple
-from glob2 import glob
+from glob import glob
 
 from ino.filters import colorize
 from ino.utils import format_available_options
@@ -79,7 +79,8 @@ class Environment(dict):
     ]
 
     if platform.system() == 'Darwin':
-        arduino_dist_dir_guesses.insert(0, '/Applications/Arduino.app/Contents/Resources/Java')
+        arduino_dist_dir_guesses.insert(0, '/Applications/Arduino.app/Contents/Java/hardware/arduino/avr')
+        arduino_dist_dir_guesses.insert(0, '/Applications/Arduino.app/Contents/Java/')
 
     default_board_model = 'uno'
     ino = sys.argv[0]
@@ -97,7 +98,7 @@ class Environment(dict):
             try:
                 self.update(pickle.load(f))
             except:
-                print colorize('Environment dump exists (%s), but failed to load' % 
+                print colorize('Environment dump exists (%s), but failed to load' %
                                self.dump_filepath, 'yellow')
 
     @property
@@ -123,19 +124,7 @@ class Environment(dict):
     def hex_path(self):
         return os.path.join(self.build_dir, self.hex_filename)
 
-    def _find(self, key, items, places, human_name, join, multi):
-        """
-        Search for file-system entry with any name passed in `items` on
-        all paths provided in `places`. Use `key` as a cache key.
-
-        If `join` is True result will be a path join of place/item,
-        otherwise only place is taken as result.
-
-        Return first found match unless `multi` is True. In that case
-        a list with all fount matches is returned.
-
-        Raise `Abort` if no matches were found.
-        """
+    def _find(self, key, items, places, human_name, join):
         if key in self:
             return self[key]
 
@@ -145,54 +134,39 @@ class Environment(dict):
         places = itertools.chain.from_iterable(os.path.expandvars(p).split(os.pathsep) for p in places)
         places = map(os.path.expanduser, places)
 
-        glob_places = itertools.chain.from_iterable(glob(p) for p in places)
-        
         print 'Searching for', human_name, '...',
-        results = []
-        for p in glob_places:
+        for p in places:
             for i in items:
                 path = os.path.join(p, i)
                 if os.path.exists(path):
                     result = path if join else p
-                    if not multi:
-                        print colorize(result, 'green')
-                        self[key] = result
-                        return result
-                    results.append(result)
-
-        if results:
-            if len(results) > 1:
-                formatted_results = ''.join(['\n  - ' + x for x in results])
-                print colorize('found multiple: %s' % formatted_results, 'green')
-            else:
-                print colorize(results[0], 'green')
-
-            self[key] = results
-            return results
+                    print colorize(result, 'green')
+                    self[key] = result
+                    return result
 
         print colorize('FAILED', 'red')
         raise Abort("%s not found. Searched in following places: %s" %
                     (human_name, ''.join(['\n  - ' + p for p in places])))
 
-    def find_dir(self, key, items, places, human_name=None, multi=False):
-        return self._find(key, items or ['.'], places, human_name, join=False, multi=multi)
+    def find_dir(self, key, items, places, human_name=None):
+        return self._find(key, items or ['.'], places, human_name, join=False)
 
-    def find_file(self, key, items=None, places=None, human_name=None, multi=False):
-        return self._find(key, items or [key], places, human_name, join=True, multi=multi)
+    def find_file(self, key, items=None, places=None, human_name=None):
+        return self._find(key, items or [key], places, human_name, join=True)
 
-    def find_tool(self, key, items, places=None, human_name=None, multi=False):
-        return self.find_file(key, items, places or ['$PATH'], human_name, multi=multi)
+    def find_tool(self, key, items, places=None, human_name=None):
+        return self.find_file(key, items, places or ['$PATH'], human_name)
 
-    def find_arduino_dir(self, key, dirname_parts, items=None, human_name=None, multi=False):
-        return self.find_dir(key, items, self.arduino_dist_places(dirname_parts), human_name, multi=multi)
+    def find_arduino_dir(self, key, dirname_parts, items=None, human_name=None):
+        return self.find_dir(key, items, self.arduino_dist_places(dirname_parts), human_name)
 
-    def find_arduino_file(self, key, dirname_parts, items=None, human_name=None, multi=False):
-        return self.find_file(key, items, self.arduino_dist_places(dirname_parts), human_name, multi=multi)
+    def find_arduino_file(self, key, dirname_parts, items=None, human_name=None):
+        return self.find_file(key, items, self.arduino_dist_places(dirname_parts), human_name)
 
-    def find_arduino_tool(self, key, dirname_parts, items=None, human_name=None, multi=False):
+    def find_arduino_tool(self, key, dirname_parts, items=None, human_name=None):
         # if not bundled with Arduino Software the tool should be searched on PATH
         places = self.arduino_dist_places(dirname_parts) + ['$PATH']
-        return self.find_file(key, items, places, human_name, multi=multi)
+        return self.find_file(key, items, places, human_name)
 
     def arduino_dist_places(self, dirname_parts):
         """
@@ -212,71 +186,44 @@ class Environment(dict):
         if 'board_models' in self:
             return self['board_models']
 
-        # boards.txt can be placed in following places
-        # - hardware/arduino/boards.txt (Arduino IDE 0.xx, 1.0.x)
-        # - hardware/arduino/{chipset}/boards.txt (Arduino 1.5.x, chipset like `avr`, `sam`)
-        # - hardware/{platform}/boards.txt (MPIDE 0.xx, platform like `arduino`, `pic32`)
-        # we should find and merge them all
-        boards_txts = self.find_arduino_file('boards.txt', ['hardware', '**'], 
-                                             human_name='Board description file (boards.txt)',
-                                             multi=True)
+        boards_txt = self.find_arduino_file('boards.txt', ['hardware', 'arduino'],
+                                            human_name='Board description file (boards.txt)')
 
         self['board_models'] = BoardModels()
         self['board_models'].default = self.default_board_model
-        for boards_txt in boards_txts:
-            with open(boards_txt) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
+        with open(boards_txt) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                multikey, val = line.split('=')
+                multikey = multikey.split('.')
 
-                    # Transform lines like:
-                    #   yun.upload.maximum_data_size=2560
-                    # into a nested dict `board_models` so that
-                    #   self['board_models']['yun']['upload']['maximum_data_size'] == 2560
-                    multikey, _, val = line.partition('=')
-                    multikey = multikey.split('.')
+                subdict = self['board_models']
+                for key in multikey[:-1]:
+                    if key not in subdict:
+                        subdict[key] = {}
+                    subdict = subdict[key]
 
-                    # traverse into dictionary up to deepest level
-                    # create nested dictionaries if they aren't exist yet
-                    subdict = self['board_models']
-                    for key in multikey[:-1]:
-                        if key not in subdict:
-                            subdict[key] = {}
-                        elif not isinstance(subdict[key], dict):
-                            # it happens that a particular key
-                            # has a value and has sublevels at same time. E.g.:
-                            #   diecimila.menu.cpu.atmega168=ATmega168
-                            #   diecimila.menu.cpu.atmega168.upload.maximum_size=14336
-                            #   diecimila.menu.cpu.atmega168.upload.maximum_data_size=1024
-                            #   diecimila.menu.cpu.atmega168.upload.speed=19200
-                            # place value `ATmega168` into a special key `_` in such case
-                            subdict[key] = {'_': subdict[key]}
-                        subdict = subdict[key]
-
-                    subdict[multikey[-1]] = val
-
-                    # store spectial `_coredir` value on top level so we later can build
-                    # paths relative to a core directory of a specific board model
-                    self['board_models'][multikey[0]]['_coredir'] = os.path.dirname(boards_txt)
+                subdict[multikey[-1]] = val
 
         return self['board_models']
 
     def board_model(self, key):
         return self.board_models()[key]
-    
+
     def add_board_model_arg(self, parser):
         help = '\n'.join([
             "Arduino board model (default: %(default)s)",
-            "For a full list of supported models run:", 
+            "For a full list of supported models run:",
             "`ino list-models'"
         ])
 
-        parser.add_argument('-m', '--board-model', metavar='MODEL', 
+        parser.add_argument('-m', '--board-model', metavar='MODEL',
                             default=self.default_board_model, help=help)
 
     def add_arduino_dist_arg(self, parser):
-        parser.add_argument('-d', '--arduino-dist', metavar='PATH', 
+        parser.add_argument('-d', '--arduino-dist', metavar='PATH',
                             help='Path to Arduino distribution, e.g. ~/Downloads/arduino-0022.\nTry to guess if not specified')
 
     def serial_port_patterns(self):
@@ -347,5 +294,5 @@ class Environment(dict):
 
 class BoardModels(OrderedDict):
     def format(self):
-        map = [(key, val['name']) for key, val in self.iteritems() if 'name' in val]
+        map = [(key, val['name']) for key, val in self.iteritems()]
         return format_available_options(map, head_width=12, default=self.default)
